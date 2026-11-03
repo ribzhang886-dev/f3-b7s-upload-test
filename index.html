@@ -1,0 +1,89 @@
+
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1">
+<title>F3-B7S HTTPS Upload Test</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  margin: 20px;
+  line-height: 1.6;
+}
+input, button {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px;
+  margin: 8px 0;
+  font-size: 16px;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: #f0f0f0;
+}
+</style>
+</head>
+<body>
+
+<h2>F3-B7S 手機 HTTPS 測試</h2>
+
+<p>Apps Script /exec 網址：</p>
+<input id="endpoint"
+       placeholder="貼上 Apps Script 網址">
+
+<button id="run">執行 POST 測試</button>
+
+<pre id="result">尚未測試</pre>
+
+<script>
+document.getElementById("run").onclick = async function () {
+  const url =
+    document.getElementById("endpoint").value.trim();
+
+  const output = document.getElementById("result");
+
+  if (!url.startsWith("https://")) {
+    output.textContent = "請輸入 HTTPS 網址";
+    return;
+  }
+
+  const payload = JSON.stringify({
+    testOnly: true,
+    testID: "TEST-001",
+    message: "F3-B7S mobile connection test"
+  });
+
+  output.textContent = "測試中...";
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      mode: "cors",
+      redirect: "follow",
+      headers: {
+        "Content-Type": "text/plain;charset=UTF-8"
+      },
+      body: payload
+    });
+
+    const raw = await response.text();
+
+    output.textContent =
+      "HTTP: " + response.status +
+      "\nResponse OK: " + response.ok +
+      "\nResponse:\n" + raw;
+
+  } catch (error) {
+    output.textContent =
+      "無法讀取回應\n" +
+      error.name + ": " + error.message;
+  }
+};
+</script>
+
+</body>
+</html>
