@@ -1,5 +1,5 @@
 'use strict';
-const CACHE_NAME='f3-b7s-t06-v1-0';
+const CACHE_NAME='f3-b7s-t06-v1-1';
 const APP_SHELL=['./','./index.html'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(APP_SHELL)).then(()=>self.skipWaiting()));
@@ -11,6 +11,9 @@ self.addEventListener('fetch',event=>{
   const url=new URL(event.request.url);
   if(event.request.method!=='GET'||url.origin!==self.location.origin)return;
   if(event.request.mode==='navigate'){
+    const base=new URL('./',self.registration.scope);
+    const isT06=url.pathname===base.pathname||url.pathname===base.pathname+'index.html';
+    if(!isT06)return; // Do not overwrite T06 offline cache with T07 test page
     event.respondWith(fetch(event.request).then(response=>{
       if(response.ok){const copy=response.clone();event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.put('./index.html',copy)));}
       return response;

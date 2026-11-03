@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#123d57">
+<title>F3-B7S T07 異常 ACK 模擬測試</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Microsoft JhengHei",sans-serif;color:#172b3b;background:#f3f6f8}*{box-sizing:border-box}body{margin:0}main{max-width:760px;margin:auto;padding:16px}header{background:#123d57;color:white;padding:20px;border-radius:14px}h1{font-size:1.4rem;margin:0 0 10px}h2{font-size:1.08rem;margin:0 0 12px}.meta{display:flex;flex-wrap:wrap;gap:10px;font-size:.9rem}.pill{background:#dbe8f0;color:#123d57;border-radius:99px;padding:3px 10px}section{background:white;padding:17px;border-radius:12px;margin-top:14px;box-shadow:0 1px 5px #0001}label{display:block;font-weight:650;margin:10px 0 5px}input,textarea{width:100%;padding:11px;border:1px solid #aab7c3;border-radius:8px;font:inherit}textarea{min-height:90px}button{font:inherit;border:0;background:#145a7a;color:white;padding:10px 14px;border-radius:8px;cursor:pointer;margin:5px 5px 5px 0}button:disabled{opacity:.5;cursor:not-allowed}.secondary{background:#e7edf1;color:#153c52}.danger{background:#7a2b2b}.item{border:1px solid #d4dee6;border-radius:10px;padding:12px;margin:10px 0;overflow-wrap:anywhere}.small{font-size:.85rem;color:#465e6d}.status{font-weight:700}.pending{color:#985400}.received{color:#17683d}.error{color:#a32929}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f4f6;border-radius:8px;padding:10px;font-size:.82rem}#notice{min-height:1.5em;font-weight:600}.warn{color:#8d3b16}.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+</style>
+</head>
+<body><main>
+<header><h1>F3-B7S｜手機上傳測試</h1><div class="meta"><span class="pill" id="version">T07-v1.0</span><span>更新：2026-11-03｜獨立模擬，不連線中央</span><span>僅供虛構資料測試</span></div></header>
+<section><div class="row"><strong>目前網路：<span id="network">檢查中</span></strong><button class="secondary" id="reload">重新載入頁面</button></div><p class="small">本頁獨立測試 ACK 驗證；不需輸入接收端網址，也不會向中央送出資料。</p><p id="swStatus" class="small">離線頁面快取：檢查中</p></section>
+<section><h2>1. 設定測試接收端（模擬模式不使用）</h2><label for="endpoint">Apps Script /exec 網址</label><input id="endpoint" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" spellcheck="false"><button id="saveEndpoint">儲存網址於本機</button><p class="small">此頁不需要填入網址，也不會連線至接收端。</p></section>
+<section><h2>2. 建立虛構測試紀錄</h2><label for="message">測試訊息</label><input id="message" value="F3-B7S T07 offline queue test"><button id="create">建立並保存到 IndexedDB</button><p class="small">每筆自動產生新的 TEST- 開頭 ArchiveID；原始 JSON 與 SHA-256 摘要一併保存，之後不再重組 JSON。</p></section>
+<section><h2>3. 異常 ACK 模擬設定</h2><p class="small warn">本頁只模擬接收端回應，絕不向 Apps Script 發出 POST；使用獨立 IndexedDB，與 T06 資料隔離。</p><label for="ackScenario">模擬回應</label><select id="ackScenario" style="width:100%;padding:11px;font:inherit"><option value="bad_id">ArchiveID 不符</option><option value="bad_digest">SHA-256 不符</option><option value="not_ok">ok = false</option><option value="missing">缺少摘要欄位</option><option value="valid">正確 ACK（最後才測）</option></select></section><section><h2>4. 本機待傳佇列</h2><div class="row"><span id="count" class="small">載入中</span><button class="secondary" id="refresh">重新讀取本機紀錄</button></div><div id="records"></div><button id="exportAll" class="secondary">匯出全部紀錄 JSON</button><p class="small">本頁所有上傳按鈕均只執行本機模擬；不會寫入 Google Sheets。</p></section>
+<section><h2>5. 操作訊息</h2><div id="notice" role="status" aria-live="polite">尚未操作</div><pre id="detail">—</pre><p class="small warn">這是公開測試端點，請勿使用任何可識別病人、員工或院內機敏資訊。請勿清除網站資料或使用無痕模式進行持久性測試。</p></section>
+</main>
+<script>
+'use strict';
+const VERSION='T07-v1.0';
+const DB_NAME='F3B7S_T07_ACK_TEST';
+const STORE='records';
+const ENDPOINT_KEY='F3B7S_T07_ENDPOINT';
+const encoder=new TextEncoder();
+const $=id=>document.getElementById(id);
+let dbPromise=null;
+let busy=false;
+function say(message,details){$('notice').textContent=message;$('detail').textContent=details===undefined?'—':typeof details==='string'?details:JSON.stringify(details,null,2);}
+function errorText(err){return err&&err.message?err.message:String(err);}
+function openDB(){if(!('indexedDB' in window))return Promise.reject(new Error('此瀏覽器無法使用 IndexedDB'));
+ if(!dbPromise)dbPromise=new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,1);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE,{keyPath:'archiveID'});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error||new Error('IndexedDB 開啟失敗'));});return dbPromise;}
+async function txOp(mode,action){const db=await openDB();return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,mode);const store=tx.objectStore(STORE);let result;let request;try{request=action(store);}catch(e){reject(e);return;}if(request){request.onsuccess=()=>{result=request.result;};request.onerror=()=>{reject(request.error||new Error('資料庫操作失敗'));};}tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error||new Error('資料庫交易失敗'));tx.onabort=()=>reject(tx.error||new Error('資料庫交易中止'));});}
+const getAll=()=>txOp('readonly',s=>s.getAll());
+const getRecord=id=>txOp('readonly',s=>s.get(id));
+const putRecord=record=>txOp('readwrite',s=>s.put(record));
+async function sha256(text){if(!crypto||!crypto.subtle)throw new Error('此環境無法使用 SHA-256');const hash=await crypto.subtle.digest('SHA-256',encoder.encode(text));return Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('');}
+function makeID(){if(!crypto||!crypto.getRandomValues)throw new Error('無法產生安全隨機 ID');const a=new Uint8Array(12);crypto.getRandomValues(a);return 'TEST-T07-'+Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');}
+function validEndpoint(value){try{const u=new URL(value);return u.protocol==='https:'&&u.hostname==='script.google.com'&&u.pathname.endsWith('/exec');}catch{return false;}}
+function download(name,content){const blob=new Blob([content],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);}
+function stateText(rec){return rec.status==='RECEIVED'?'模擬已確認':rec.status==='UPLOADING'?'待確認（可重試）':'待傳';}
+function updateNetwork(){$('network').textContent=navigator.onLine?'瀏覽器顯示在線':'瀏覽器顯示離線';}
+async function render(){const list=(await getAll()).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));$('count').textContent=`共 ${list.length} 筆；待傳 ${list.filter(x=>x.status!=='RECEIVED').length} 筆；已確認 ${list.filter(x=>x.status==='RECEIVED').length} 筆`;
+ const root=$('records');root.replaceChildren();if(!list.length){const p=document.createElement('p');p.className='small';p.textContent='目前沒有本機測試紀錄';root.append(p);return;}
+ for(const rec of list){const box=document.createElement('div');box.className='item';const title=document.createElement('div');title.className='status '+(rec.status==='RECEIVED'?'received':'pending');title.textContent=stateText(rec);const id=document.createElement('div');id.textContent=rec.archiveID;id.style.fontWeight='600';const info=document.createElement('div');info.className='small';info.textContent=`建立：${rec.createdAt}｜嘗試：${rec.attempts||0} 次｜摘要：${rec.digest}`;box.append(title,id,info);
+ const upload=document.createElement('button');upload.textContent=rec.status==='RECEIVED'?'重新驗證模擬 ACK':'模擬上傳 / 驗證 ACK';upload.disabled=busy;upload.onclick=()=>uploadRecord(rec.archiveID);
+ const exportBtn=document.createElement('button');exportBtn.className='secondary';exportBtn.textContent='匯出此筆 JSON';exportBtn.onclick=()=>download(rec.archiveID+'.json',JSON.stringify({archiveID:rec.archiveID,rawJSONDigest:rec.digest,rawJSON:rec.raw,status:rec.status,createdAt:rec.createdAt,confirmedAt:rec.confirmedAt||null},null,2));box.append(upload,exportBtn);root.append(box);}
+}
+async function createRecord(){if(busy)return;busy=true;$('create').disabled=true;try{const archiveID=makeID();const message=$('message').value.trim()||'F3-B7S T07 test';const raw=JSON.stringify({testOnly:true,archiveID,message});const digest=await sha256(raw);const rec={archiveID,raw,digest,createdAt:new Date().toISOString(),status:'PENDING',attempts:0,confirmedAt:null,lastCode:null};await putRecord(rec);say('已保存至 IndexedDB，尚未上傳', {archiveID,rawJSONDigest:digest});await render();}catch(e){say('本機保存失敗，請勿視為已建立紀錄',errorText(e));}finally{busy=false;$('create').disabled=false;}}
+async function uploadRecord(id){if(busy)return;busy=true;try{const rec=await getRecord(id);if(!rec)throw new Error('本機找不到此紀錄');const digest=await sha256(rec.raw);if(digest!==rec.digest)throw new Error('本機 JSON 摘要不一致，已停止上傳');
+ rec.attempts=(rec.attempts||0)+1;rec.lastAttemptAt=new Date().toISOString();if(rec.status!=='RECEIVED')rec.status='UPLOADING';await putRecord(rec);await render();say('正在執行本機 ACK 模擬，未發出網路請求',{archiveID:id});
+ const scenario=$('ackScenario').value;
+ const ack={ok:true,testOnly:true,code:'RECEIVED',archiveID:rec.archiveID,rawJSONDigest:rec.digest};
+ if(scenario==='bad_id')ack.archiveID='TEST-WRONG-ID';
+ if(scenario==='bad_digest')ack.rawJSONDigest='0'.repeat(64);
+ if(scenario==='not_ok')ack.ok=false;
+ if(scenario==='missing')delete ack.rawJSONDigest;
+ const response={ok:true,status:200};
+ say('模擬 HTTP 200 回應，正在驗證 ACK',{scenario,ack});
+ if(!response.ok)throw new Error('HTTP '+response.status+'，保留待確認狀態');
+ if(!ack||ack.ok!==true||ack.testOnly!==true||!['RECEIVED','ALREADY_RECEIVED'].includes(ack.code)||ack.archiveID!==rec.archiveID||typeof ack.rawJSONDigest!=='string'||ack.rawJSONDigest!==rec.digest){throw new Error('ACK 驗證未通過：'+JSON.stringify(ack));}
+ const latest=await getRecord(id);if(!latest||latest.raw!==rec.raw||latest.digest!==rec.digest)throw new Error('本機紀錄在傳送期間發生變更');latest.status='RECEIVED';latest.confirmedAt=new Date().toISOString();latest.lastCode=ack.code;await putRecord(latest);say('模擬 ACK 驗證通過：'+ack.code,ack);await render();
+ }catch(e){const rec=await getRecord(id).catch(()=>null);if(rec&&rec.status==='UPLOADING'){rec.status='PENDING';rec.lastCode='UNCONFIRMED';await putRecord(rec).catch(()=>{});}say('尚未取得可信 ACK；原始資料保留，可安全重試',errorText(e));await render().catch(()=>{});}finally{busy=false;await render().catch(()=>{});}}
+$('reload').onclick=()=>location.reload();
+$('saveEndpoint').onclick=()=>{const url=$('endpoint').value.trim();if(!validEndpoint(url)){say('網址格式不正確，請使用 script.google.com 的 HTTPS /exec 網址');return;}localStorage.setItem(ENDPOINT_KEY,url);say('接收端網址已儲存於此瀏覽器');};
+$('create').onclick=createRecord;$('refresh').onclick=()=>render().then(()=>say('已重新讀取 IndexedDB')).catch(e=>say('讀取失敗',errorText(e)));
+$('exportAll').onclick=async()=>{try{const records=await getAll();download('F3-B7S_T06_Export_'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify({testOnly:true,version:VERSION,exportedAt:new Date().toISOString(),records},null,2));say('已產生全部紀錄 JSON 匯出檔，共 '+records.length+' 筆');}catch(e){say('匯出失敗',errorText(e));}};
+window.addEventListener('online',updateNetwork);window.addEventListener('offline',updateNetwork);
+(async()=>{updateNetwork();$('endpoint').value=localStorage.getItem(ENDPOINT_KEY)||'';try{await openDB();await render();say('本機資料庫已就緒');}catch(e){say('IndexedDB 無法使用',errorText(e));}
+ $('swStatus').textContent='T07 本機模擬頁：不註冊新的 Service Worker';})();
+</script></body></html>
