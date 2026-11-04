@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>F3-B7S T08-7 v1.0｜伺服器端異常 ACK</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:760px;margin:auto;padding:16px;background:#f5f7fa;color:#182331}section{background:#fff;border:1px solid #d2dae4;border-radius:12px;padding:16px;margin:12px 0}h1{font-size:1.4rem}h2{font-size:1.1rem}button,input,select{font:inherit;padding:10px;box-sizing:border-box}input[type=url],select{width:100%;margin:7px 0}button{border:1px solid #7b91aa;border-radius:7px;background:#eaf2ff;margin:5px 5px 5px 0}button:disabled{opacity:.45}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f3f6;border-radius:6px;padding:10px;font-size:.84rem}.warn{color:#8c321a}small{color:#4b5563}.good{color:#126445}
+</style></head><body>
+<h1>F3-B7S｜T08-7 v1.0</h1><p><strong>真實 Apps Script 異常 ACK｜獨立測試環境</strong></p>
+<section><p class="warn">僅供虛構測試資料。不得輸入病人資料。本頁使用獨立 IndexedDB，不修改任何既有測試紀錄。</p>
+<label for="endpoint">T08-7 專用 Apps Script /exec 網址</label><input id="endpoint" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec">
+<small>請使用全新 T08-7 部署。網址僅保留於目前頁面，不存入 IndexedDB。</small></section>
+<section><h2>1. 選擇模式並建立紀錄</h2>
+<label for="mode">異常 ACK 模式（建立紀錄時固定）</label>
+<select id="mode"><option value="7A">T08-7A｜保存後回傳 ok:false</option><option value="7B">T08-7B｜保存後回傳錯誤 ArchiveID</option><option value="7C">T08-7C｜保存後回傳錯誤 SHA-256</option><option value="7D">T08-7D｜保存後缺少 rawJSONDigest</option><option value="7E">T08-7E｜保存後回傳無效 JSON</option><option value="7F">T08-7F｜首次不保存，回傳 SERVER_ERROR</option></select>
+<button id="create">建立新虛構紀錄</button><button id="reload">重新讀取本機紀錄</button><pre id="record">載入中…</pre>
+<small>切換模式不會修改已建立紀錄；要測其他模式，請先建立新的紀錄。</small></section>
+<section><h2>2. 真實 HTTPS POST</h2>
+<button id="send" disabled>上傳目前 Pending 紀錄</button><p><small>第一次應拒絕異常 ACK，保留 Pending。確認獨立 Sheets 後，再按相同按鈕重送同一筆原始 JSON；第二次應取得有效 ACK。</small></p>
+<pre id="result">尚未上傳</pre></section>
+<section><h2>3. 紀錄與查核</h2><button id="export" disabled>匯出目前紀錄 JSON</button><p>獨立 Sheets：<code>UploadTest_7</code> 保存結果；<code>AttemptLog_7</code> 記錄伺服器處理模式。7F 首次應只有 AttemptLog，沒有 UploadTest 資料列。</p><pre id="log"></pre></section>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const DB='F3B7S_T08_7_ACK_ONLY_V1',STORE='records';
+const MSG='F3-B7S T08-7 server-origin ACK test';
+let current=null,busy=false;
+const hex=b=>Array.from(new Uint8Array(b)).map(v=>v.toString(16).padStart(2,'0')).join('');
+async function sha(s){return hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)))}
+function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:'archiveID'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+async function put(v){const d=await openDB();try{await new Promise((resolve,reject)=>{const tx=d.transaction(STORE,'readwrite');tx.objectStore(STORE).put(v);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error)})}finally{d.close()}}
+async function all(){const d=await openDB();try{return await new Promise((resolve,reject)=>{const req=d.transaction(STORE,'readonly').objectStore(STORE).getAll();req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}finally{d.close()}}
+function log(s){$('log').textContent=new Date().toLocaleTimeString()+' '+s+'\n'+$('log').textContent}
+function render(){if(!current){$('record').textContent='尚無 T08-7 測試紀錄';$('send').disabled=true;$('export').disabled=true;return} $('record').textContent=`ArchiveID：${current.archiveID}\n模式：${current.mode}\n狀態：${current.status}\nSHA-256：${current.rawJSONDigest}\n建立：${current.createdAt}\n嘗試次數：${current.attemptCount||0}`;$('send').disabled=busy||current.status!=='Pending';$('export').disabled=busy}
+async function load(){const records=await all();records.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));current=records[0]||null;render();log('讀取 '+records.length+' 筆 T08-7 專用紀錄')}
+$('create').onclick=async()=>{if(busy)return;try{const id='TEST-T087-'+hex(crypto.getRandomValues(new Uint8Array(12)));const mode=$('mode').value;const raw=JSON.stringify({testOnly:true,archiveID:id,message:MSG,mode});const item={archiveID:id,mode,rawJSON:raw,rawJSONDigest:await sha(raw),status:'Pending',createdAt:new Date().toISOString(),confirmedAt:null,attemptCount:0,lastResponse:null,ack:null};await put(item);current=item;render();$('result').textContent='已建立 Pending，尚未送出';log('建立 '+id+' 模式 '+mode)}catch(e){log('建立失敗：'+e.message)}};
+$('reload').onclick=()=>load().catch(e=>log('讀取失敗：'+e.message));
+$('send').onclick=async()=>{
+ if(!current||current.status!=='Pending'||busy)return;
+ const url=$('endpoint').value.trim();
+ if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(url)){alert('請輸入全新 T08-7 Apps Script /exec 網址');return}
+ busy=true;render();const saved=current;let evidence=null;
+ try{
+  if(await sha(saved.rawJSON)!==saved.rawJSONDigest)throw Error('本機 JSON SHA-256 不符，禁止送出');
+  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:saved.rawJSON,redirect:'follow'});
+  const body=await response.text();
+  evidence={httpStatus:response.status,body:body.slice(0,2000),at:new Date().toISOString()};
+  let ack;try{ack=JSON.parse(body)}catch(_){throw Error('伺服器回應不是有效 JSON')}
+  if(!response.ok||ack.ok!==true||!['RECEIVED','ALREADY_RECEIVED'].includes(ack.code)||ack.archiveID!==saved.archiveID||ack.rawJSONDigest!==saved.rawJSONDigest){throw Error('ACK 驗證拒絕：'+body)}
+  const next={...saved,status:'RECEIVED',confirmedAt:new Date().toISOString(),attemptCount:(saved.attemptCount||0)+1,lastResponse:evidence,ack};
+  await put(next);current=next;$('result').textContent='有效 ACK，已保存 RECEIVED：\n'+JSON.stringify(ack,null,2);log('ACK '+ack.code+'；RECEIVED 已持久保存');
+ }catch(e){
+  const next={...saved,status:'Pending',attemptCount:(saved.attemptCount||0)+1,lastResponse:evidence};
+  try{await put(next);current=next}catch(storageErr){$('result').textContent='嚴重：本機持久保存失敗：'+storageErr.message;log('本機保存失敗');busy=false;render();return}
+  $('result').textContent='未取得有效 ACK，保留 Pending：\n'+String(e)+(evidence?'\n\n伺服器原始回應：\n'+evidence.body:'');log('ACK 未通過；Pending 保留');
+ }finally{busy=false;render()}
+};
+$('export').onclick=()=>{if(!current)return;const blob=new Blob([JSON.stringify(current,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=current.archiveID+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);log('匯出本機 JSON')};
+load().catch(e=>{$('record').textContent='IndexedDB 初始化失敗：'+e.message;log('初始化失敗：'+e.message)});
+</script></body></html>
