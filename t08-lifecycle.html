@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>F3-B7S T08-8 生命週期測試 v1.0</title>
+<style>
+:root{color-scheme:light}body{font-family:system-ui,'Noto Sans TC',sans-serif;max-width:760px;margin:auto;padding:16px;background:#f4f7fa;color:#182334}h1{font-size:1.4rem}h2{font-size:1.1rem}section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:14px;margin:12px 0}label{display:block;font-weight:600;margin:8px 0 4px}input,select,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #9ca9b8;max-width:100%;box-sizing:border-box}input,select{width:100%}button{background:#174d7a;color:white;border:0;margin:5px 4px 5px 0}button.secondary{background:#566579}button:disabled{opacity:.5}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f4f7;padding:10px;border-radius:8px;font-size:.78rem}small,.muted{color:#526174}strong{overflow-wrap:anywhere}.ok{color:#12683a}.warn{color:#9b4a00}.error{color:#a42222}.mono{font-family:ui-monospace,monospace;overflow-wrap:anywhere}#status{font-weight:700} .note{border-left:4px solid #d79d26;padding-left:9px}
+</style></head><body>
+<h1>F3-B7S｜T08-8 Android 生命週期測試</h1>
+<p class="note">v1.0｜僅供虛構資料測試。每個 8A～8F 情境建立獨立紀錄；不自動上傳，不清除既有資料。請勿輸入病人資訊。</p>
+<section><h2>1. 測試設定</h2>
+<label for="endpoint">獨立 Apps Script Web App /exec</label><input id="endpoint" type="url" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off">
+<label for="scenario">測試情境</label><select id="scenario"><option value="8A">8A｜切換背景 1 分鐘</option><option value="8B">8B｜鎖定螢幕 3 分鐘</option><option value="8C">8C｜關閉分頁再開啟</option><option value="8D">8D｜強制停止 Chrome 再開啟</option><option value="8E">8E｜Android 重新開機</option><option value="8F">8F｜恢復後真實上傳</option></select>
+<button id="saveConfig" class="secondary">儲存網址設定</button><button id="create">建立本情境新虛構紀錄</button>
+<p class="muted">建立後必須看到「IndexedDB 已完成寫入」，才可切換背景、關閉分頁或重新開機。</p></section>
+<section><h2>2. 本機紀錄</h2><label for="recordSelect">選擇已保存紀錄</label><select id="recordSelect"></select>
+<p>目前狀態：<span id="status">尚無紀錄</span></p><div id="details" class="mono"></div>
+<button id="reload" class="secondary">從 IndexedDB 重新讀取</button><button id="verify" class="secondary">重新計算 SHA-256 比對</button><button id="export" class="secondary">匯出目前紀錄 JSON</button>
+<button id="upload">上傳選定 Pending 紀錄（僅 8F 或測試恢復時）</button>
+<p class="muted">若需驗證 8A～8E 的上傳恢復，可在完成該情境的持續性檢查後，上傳同一筆 Pending；8F 可另建紀錄專測上傳。</p></section>
+<section><h2>3. 操作提示與事件</h2><p id="hint"></p><pre id="events">尚未操作</pre></section>
+<section><h2>4. 安全限制</h2><p>本站 IndexedDB 是瀏覽器網站儲存空間，不保證清除網站資料、無痕模式或裝置故障後仍保留。請勿以本測試頁保存正式資料。強制停止 Chrome 不等於清除儲存空間。</p></section>
+<script>
+'use strict';
+const DB_NAME='F3B7S_T088_LIFECYCLE_V1_ONLY', DB_VERSION=1, STORE='records', CONFIG='config', P='F3B7S-T088-v1';
+const $=id=>document.getElementById(id);
+let db, selected=null, busy=false;
+function log(message){$('events').textContent=new Date().toLocaleString()+'  '+message+'\n'+$('events').textContent.slice(0,4500);}
+function txPromise(tx){return new Promise((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error||new Error('IndexedDB transaction failed'));tx.onabort=()=>reject(tx.error||new Error('IndexedDB transaction aborted'));});}
+function openDB(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB_NAME,DB_VERSION);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains(STORE))d.createObjectStore(STORE,{keyPath:'archiveID'});if(!d.objectStoreNames.contains(CONFIG))d.createObjectStore(CONFIG);};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
+async function put(store,value,key){const t=db.transaction(store,'readwrite');if(key===undefined)t.objectStore(store).put(value);else t.objectStore(store).put(value,key);await txPromise(t);}
+async function get(store,key){return new Promise((resolve,reject)=>{const t=db.transaction(store,'readonly');const r=t.objectStore(store).get(key);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
+async function allRecords(){return new Promise((resolve,reject)=>{const t=db.transaction(STORE,'readonly');const r=t.objectStore(STORE).getAll();r.onsuccess=()=>resolve(r.result||[]);r.onerror=()=>reject(r.error);});}
+async function sha256(raw){const bytes=new TextEncoder().encode(raw);const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,'0')).join('');}
+function randomID(){const b=new Uint8Array(16);crypto.getRandomValues(b);return 'TEST-T088-'+Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');}
+function setHint(){const s=$('scenario').value;const hints={
+'8A':'建立 Pending，確認寫入完成 → 切換到其他 App 1 分鐘 → 返回 → 按「重新讀取」與「比對」。',
+'8B':'建立 Pending，確認寫入完成 → 鎖定螢幕 3 分鐘 → 解鎖 → 重新讀取與比對。',
+'8C':'建立 Pending，確認寫入完成 → 關閉此分頁 → 用相同網址重開 → 選擇原 ArchiveID 並比對。',
+'8D':'建立 Pending，確認寫入完成 → Android 設定中強制停止 Chrome（勿清除資料）→ 重開網址 → 比對。',
+'8E':'建立 Pending，確認寫入完成 → 正常重新啟動手機 → 重開網址 → 比對。',
+'8F':'建立 Pending，確認寫入完成 → 按「上傳」→ 檢查獨立 Sheets 只有 1 筆 → 重開頁面驗證 RECEIVED。'};
+$('hint').textContent=hints[s];}
+async function refresh(preferred){const rows=(await allRecords()).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));const sel=$('recordSelect');const id=preferred||sel.value;sel.replaceChildren();for(const r of rows){const o=document.createElement('option');o.value=r.archiveID;o.textContent=`${r.scenario} | ${r.status} | ${r.archiveID}`;sel.appendChild(o);}if(rows.length){sel.value=rows.some(r=>r.archiveID===id)?id:rows[0].archiveID;selected=await get(STORE,sel.value);}else selected=null;render();}
+function render(){if(!selected){$('status').textContent='尚無紀錄';$('details').textContent='';return;}$('status').textContent=selected.status;$('status').className=selected.status==='RECEIVED'?'ok':'warn';$('details').textContent=`情境：${selected.scenario}\nArchiveID：${selected.archiveID}\n建立時間：${selected.createdAt}\nSHA-256：${selected.rawJSONDigest}\n原始 JSON：${selected.rawJSON}\n最後結果：${selected.lastResult||'尚未上傳'}`;}
+async function create(){const scenario=$('scenario').value;const rawObj={testOnly:true,archiveID:randomID(),scenario,createdAt:new Date().toISOString(),sample:'FAKE-TEST-DATA-NO-PATIENT-INFO'};const rawJSON=JSON.stringify(rawObj);const record={archiveID:rawObj.archiveID,scenario,createdAt:rawObj.createdAt,rawJSON,rawJSONDigest:await sha256(rawJSON),status:'Pending',lastResult:''};await put(STORE,record);await refresh(record.archiveID);log('IndexedDB 已完成寫入：'+record.archiveID);}
+async function verify(){if(!selected)return;const current=await get(STORE,selected.archiveID);if(!current)throw Error('找不到原始紀錄');const digest=await sha256(current.rawJSON);const obj=JSON.parse(current.rawJSON);const ok=digest===current.rawJSONDigest&&obj.archiveID===current.archiveID&&obj.scenario===current.scenario&&obj.testOnly===true;log(ok?'PASS：IndexedDB 原始 JSON / ArchiveID / SHA-256 一致':'FAIL：本機資料完整性不一致');}
+async function upload(){if(!selected)throw Error('請先建立或選擇紀錄');if(selected.status!=='Pending')throw Error('只有 Pending 可以上傳');const endpoint=$('endpoint').value.trim();if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(endpoint))throw Error('請輸入 T08-8 專用 /exec 網址');const current=await get(STORE,selected.archiveID);if(!current||await sha256(current.rawJSON)!==current.rawJSONDigest)throw Error('本機 SHA-256 驗證失敗，禁止上傳');const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),25000);busy=true;$('upload').disabled=true;try{
+  const resp=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({testOnly:true,protocol:P,rawJSON:current.rawJSON,rawJSONDigest:current.rawJSONDigest}),signal:controller.signal,redirect:'follow'});
+  if(!resp.ok)throw Error('HTTP '+resp.status);const ack=await resp.json();
+  const valid=ack&&ack.ok===true&&['RECEIVED','ALREADY_RECEIVED'].includes(ack.status)&&ack.archiveID===current.archiveID&&ack.rawJSONDigest===current.rawJSONDigest;
+  if(!valid)throw Error('ACK 不符合要求：'+JSON.stringify(ack).slice(0,300));
+  current.status='RECEIVED';current.lastResult=ack.status;current.receivedAt=new Date().toISOString();await put(STORE,current);log('有效 ACK：'+ack.status+'；RECEIVED 已持久保存');
+ }catch(err){log('未取得有效 ACK；Pending 保留：'+(err.name==='AbortError'?'25 秒逾時':String(err.message||err)));}finally{clearTimeout(timer);busy=false;$('upload').disabled=false;await refresh(current.archiveID);}}
+function download(){if(!selected)return;const blob=new Blob([JSON.stringify(selected,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=selected.archiveID+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);log('已觸發 JSON 匯出');}
+async function action(fn){try{await fn();}catch(err){log('錯誤：'+String(err.message||err));}}
+window.addEventListener('DOMContentLoaded',()=>action(async()=>{db=await openDB();$('endpoint').value=(await get(CONFIG,'endpoint'))||'';setHint();await refresh();log('已開啟獨立 IndexedDB，未執行自動上傳');
+$('scenario').addEventListener('change',setHint);$('saveConfig').addEventListener('click',()=>action(async()=>{await put(CONFIG,$('endpoint').value.trim(),'endpoint');log('獨立 /exec 網址設定已保存');}));
+$('create').addEventListener('click',()=>action(create));$('reload').addEventListener('click',()=>action(async()=>{await refresh();log('已重新讀取 IndexedDB');}));$('recordSelect').addEventListener('change',()=>action(async()=>{selected=await get(STORE,$('recordSelect').value);render();}));$('verify').addEventListener('click',()=>action(verify));$('upload').addEventListener('click',()=>{if(!busy)action(upload);});$('export').addEventListener('click',download);
+}));
+</script></body></html>
