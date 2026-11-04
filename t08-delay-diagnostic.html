@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>F3-B7S T08-6B-DIAG v1.0</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:740px;margin:auto;padding:16px;background:#f5f7fa;color:#182331}section{background:#fff;border:1px solid #d2dae4;border-radius:12px;padding:16px;margin:12px 0}h1{font-size:1.45rem}h2{font-size:1.1rem}button,input,select{font:inherit;padding:10px;box-sizing:border-box}input[type=url]{width:100%;margin:8px 0}button{border:1px solid #7b91aa;border-radius:7px;background:#eaf2ff;margin:5px 5px 5px 0}button:disabled{opacity:.45}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f3f6;border-radius:6px;padding:10px;font-size:.84rem}.warn{color:#8c321a}small{color:#4b5563}.good{color:#126445}
+</style></head><body>
+<h1>F3-B7S｜T08-6B-DIAG v1.0</h1><p><strong>獨立診斷：先以 25 秒確認正常 POST，再以 3 秒測試逾時</strong></p>
+<section><p class="warn">只使用虛構資料。請勿輸入病人資料。本診斷頁使用全新 IndexedDB，不讀取也不修改 T06/T07/T08 及 T08-6B-2 原測試頁紀錄。</p>
+<label for="endpoint">全新 T08-6B-2 Apps Script /exec 網址</label><input id="endpoint" type="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec">
+<small>只能使用 T08-6B-2 新建的獨立 Apps Script /exec 網址；不得使用 T08-1～6A 原端點。網址不儲存，重新整理需重新輸入。</small></section>
+<section><h2>1. 建立測試紀錄</h2><button id="create">建立新的虛構紀錄</button><button id="reload">重新讀取本機紀錄</button><pre id="record">載入中…</pre></section>
+<section><h2>2. 真實 HTTPS 上傳</h2><label for="timeout">客戶端等待上限（每次送出前選擇）</label><select id="timeout"><option value="25000" selected>25 秒｜正常 POST 基準測試</option><option value="3000">3 秒｜受控逾時測試</option></select><p><small>每個測試請先建立全新虛構紀錄。正常 POST 基準測試應先得到 RECEIVED；再建立另一筆新紀錄測試 3 秒逾時。</small></p><button id="send" disabled>上傳目前 Pending 紀錄</button><p><small>獨立伺服器對新紀錄先保存、再延遲 12 秒；同筆紀錄重送不延遲。先以 25 秒做基準測試，再以全新紀錄及 3 秒等待測試逾時。</small></p><pre id="result">尚未上傳</pre></section>
+<section><h2>3. 紀錄與匯出</h2><button id="export" disabled>匯出目前紀錄 JSON</button><p>請在獨立 Google Sheets 的 UploadTest_B2 核對 ArchiveID、RawJSONDigest、RawJSON 與筆數。</p><pre id="log"></pre></section>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const DB='F3B7S_T08_6B_DIAG_ONLY_V1',STORE='records';
+const MSG='F3-B7S T08-6B-2 controlled post-save delay test';
+let current=null,busy=false;
+const hex=buffer=>Array.from(new Uint8Array(buffer)).map(v=>v.toString(16).padStart(2,'0')).join('');
+async function sha(s){return hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s)))}
+function openDB(){return new Promise((resolve,reject)=>{let r=indexedDB.open(DB,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:'archiveID'});r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
+async function put(v){const d=await openDB();try{await new Promise((resolve,reject)=>{const tx=d.transaction(STORE,'readwrite');tx.objectStore(STORE).put(v);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error)})}finally{d.close()}}
+async function all(){const d=await openDB();try{return await new Promise((resolve,reject)=>{const req=d.transaction(STORE,'readonly').objectStore(STORE).getAll();req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}finally{d.close()}}
+function log(s){$('log').textContent=new Date().toLocaleTimeString()+' '+s+'\n'+$('log').textContent}
+function render(){if(!current){$('record').textContent='尚無本頁測試紀錄';$('send').disabled=true;$('export').disabled=true;return} $('record').textContent=`ArchiveID：${current.archiveID}\n狀態：${current.status}\nSHA-256：${current.rawJSONDigest}\n建立：${current.createdAt}`;$('send').disabled=busy||current.status!=='Pending';$('export').disabled=busy}
+async function load(){const records=await all();records.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));current=records[0]||null;render();log('讀取 '+records.length+' 筆 T08-6B-2 專用紀錄')}
+$('create').onclick=async()=>{if(busy)return;try{const id='TEST-T08B2-'+hex(crypto.getRandomValues(new Uint8Array(12)));const raw=JSON.stringify({testOnly:true,archiveID:id,message:MSG});const item={archiveID:id,rawJSON:raw,rawJSONDigest:await sha(raw),status:'Pending',createdAt:new Date().toISOString(),confirmedAt:null,ack:null};await put(item);current=item;render();$('result').textContent='已建立 Pending，尚未送出';log('建立 '+id)}catch(e){log('建立失敗：'+e.message)}};
+$('reload').onclick=()=>load().catch(e=>log('讀取失敗：'+e.message));
+$('send').onclick=async()=>{
+ if(!current||current.status!=='Pending'||busy)return;
+ const url=$('endpoint').value.trim();
+ if(!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec(?:\?.*)?$/.test(url)){alert('請輸入全新 T08-6B-2 Apps Script /exec 網址');return}
+ busy=true;render();const saved=current;const timeoutMs=Number($('timeout').value);let timer=null,timeoutTriggered=false;
+ try{
+  if(await sha(saved.rawJSON)!==saved.rawJSONDigest)throw Error('本機 JSON SHA-256 不符，禁止送出');
+  const controller=new AbortController();
+  timer=setTimeout(()=>{timeoutTriggered=true;controller.abort()},timeoutMs);
+  log('開始真實 POST；等待上限 '+(timeoutMs/1000)+' 秒；'+saved.archiveID);
+  const response=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:saved.rawJSON,redirect:'follow',signal:controller.signal});
+  const body=await response.text();
+  clearTimeout(timer);timer=null;
+  if(timeoutTriggered)throw Error('已逾時：忽略遲到回應');
+  let ack;try{ack=JSON.parse(body)}catch(_){throw Error('HTTP 回應非 JSON')}
+  if(!response.ok||ack.ok!==true||!['RECEIVED','ALREADY_RECEIVED'].includes(ack.code)||ack.archiveID!==saved.archiveID||ack.rawJSONDigest!==saved.rawJSONDigest){throw Error('ACK 驗證失敗；HTTP '+response.status+'；'+body)}
+  const next={...saved,status:'RECEIVED',confirmedAt:new Date().toISOString(),ack};
+  await put(next);current=next;$('result').textContent='有效 ACK，已持久保存 RECEIVED：\n'+JSON.stringify(ack,null,2);log('ACK '+ack.code+'；RECEIVED 已保存');
+ }catch(e){const msg=timeoutTriggered?'客戶端等待逾時（'+(timeoutMs/1000)+' 秒），未取得有效 ACK':String(e);$('result').textContent='未確認成功，保留 Pending：\n'+msg;log('未確認成功；'+msg)}
+ finally{if(timer!==null)clearTimeout(timer);busy=false;render()}
+};
+$('export').onclick=()=>{if(!current)return;const blob=new Blob([JSON.stringify(current,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=current.archiveID+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);log('匯出本機 JSON')};
+load().catch(e=>{$('record').textContent='IndexedDB 初始化失敗：'+e.message;log('初始化失敗：'+e.message)});
+</script></body></html>
